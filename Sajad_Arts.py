@@ -238,7 +238,7 @@ def generate_pdf(
 
     story.append(Paragraph(shop_location, center_style))
 
-    story.append(Paragraph(f"PHONE: {shop_phone}", center_style))
+    story.append(Paragraph(f"SHOP PHONE: {shop_phone}", center_style))
 
     story.append(Spacer(1, 5))
 
