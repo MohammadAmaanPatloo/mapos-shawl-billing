@@ -258,7 +258,7 @@ def generate_pdf(
             Paragraph(f"<b>Time:</b> {now.strftime('%H:%M:%S')}", normal_style),
         ],
         [
-            Paragraph(f"<b>Phone:</b> {customer_phone}", normal_style),
+            Paragraph(f"<b>Customer Phone:</b> {customer_phone}", normal_style),
             "",
         ],
     ]
@@ -300,7 +300,6 @@ def generate_pdf(
             Paragraph(str(product["quantity"]), center_style),
             Paragraph(f"{product['rate']:,.2f}", right_style),
             Paragraph(f"{amount:,.2f}", right_style),
-            # Paragraph(f"{amount:,.2f}", right_style if False else center_style),
         ])
 
     product_table = Table(product_data, colWidths=[27 * mm, 10 * mm, 17 * mm, 21 * mm])
