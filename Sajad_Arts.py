@@ -17,6 +17,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from io import BytesIO
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 # ============================================================
@@ -125,6 +126,15 @@ def number_to_words(number):
         return f"{rupees_words} Rupees and {paise_words} Paise Only"
 
     return f"{rupees_words} Rupees Only"
+
+
+# ========================================================
+# INDIA DATE & TIME
+# ========================================================
+
+
+def get_india_datetime():
+    return datetime.now(ZoneInfo("Asia/Kolkata"))
 
 
 # ============================================================
@@ -256,7 +266,7 @@ def generate_pdf(
     # BILL INFORMATION
     # ========================================================
 
-    now = datetime.now()
+    now = get_india_datetime()
 
     bill_info = [
         [
@@ -1066,7 +1076,7 @@ if generate_bill:
         # SAVE BILL DATA
         # ====================================================
 
-        now = datetime.now()
+        now = get_india_datetime()
 
         bill_date = now.strftime("%d/%m/%y")
         bill_time = now.strftime("%H:%M:%S")
