@@ -1,5 +1,7 @@
 import streamlit as st
 from reportlab.lib import colors
+import pandas as pd
+from openpyxl import Workbook, load_workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.platypus import (
@@ -14,8 +16,14 @@ from urllib.parse import quote
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from io import BytesIO
-from urllib.parse import quote
 from datetime import datetime
+
+
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
+
+st.set_page_config(page_title="Shawl Billing App", page_icon="🧣", layout="wide")
 
 
 def number_to_words(number):
@@ -120,13 +128,6 @@ def number_to_words(number):
 
 
 # ============================================================
-# PAGE CONFIGURATION
-# ============================================================
-
-st.set_page_config(page_title="Shawl Billing App", page_icon="🧣", layout="wide")
-
-
-# ============================================================
 # SESSION STATE
 # ============================================================
 
@@ -135,6 +136,15 @@ if "products" not in st.session_state:
 
 if "bill_no" not in st.session_state:
     st.session_state.bill_no = 1
+
+if "product_form_reset" not in st.session_state:
+    st.session_state.product_form_reset = 0
+
+if "bill_number_reset" not in st.session_state:
+    st.session_state.bill_number_reset = 0
+
+if "bill_records" not in st.session_state:
+    st.session_state.bill_records = []
 
 
 # ============================================================
@@ -412,7 +422,7 @@ def generate_pdf(
         )
 
     # ========================================================
-    # EQUAL SIGN AFTER GRAND TOTAL
+    # LINE AFTER GRAND TOTAL
     # ========================================================
 
     story.append(Spacer(1, 3))
@@ -545,6 +555,59 @@ def generate_pdf(
     return buffer.getvalue()
 
 
+# ========================================================
+# CREATE EXCEL FILE
+# ========================================================
+
+
+def create_excel_file(bill_records):
+
+    columns = [
+        "Bill No",
+        "Date",
+        "Time",
+        "Customer Name",
+        "Customer Number",
+        "Item",
+        "Quantity",
+        "Rate",
+        "Amount",
+        "Sub Total",
+        "GST %",
+        "GST Amount",
+        "Grand Total",
+        "Payment Mode",
+    ]
+
+    df = pd.DataFrame(bill_records, columns=columns)
+
+    excel_buffer = BytesIO()
+
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Bills")
+
+        worksheet = writer.sheets["Bills"]
+
+        # Freeze header row
+        worksheet.freeze_panes = "A2"
+
+        # Auto-adjust column widths
+        for column_cells in worksheet.columns:
+            max_length = 0
+
+            column_letter = column_cells[0].column_letter
+
+            for cell in column_cells:
+                if cell.value is not None:
+                    max_length = max(max_length, len(str(cell.value)))
+
+            worksheet.column_dimensions[column_letter].width = min(max_length + 2, 30)
+
+    excel_buffer.seek(0)
+
+    return excel_buffer.getvalue()
+
+
 # ============================================================
 # APP HEADER
 # ============================================================
@@ -596,7 +659,11 @@ st.sidebar.divider()
 st.sidebar.title("🧾 Bill Information")
 
 bill_no = st.sidebar.number_input(
-    "Bill Number", min_value=1, value=st.session_state.bill_no, step=1
+    "Bill Number",
+    min_value=1,
+    value=st.session_state.bill_no,
+    step=1,
+    key=f"bill_number_{st.session_state.bill_number_reset}",
 )
 
 # ============================================================
@@ -776,12 +843,21 @@ else:
 
     with col2:
         quantity = st.number_input(
-            "Quantity", min_value=1, value=1, step=1, format="%d", key="new_quantity"
+            "Quantity",
+            min_value=0,
+            value=0,
+            step=1,
+            format="%d",
+            key=f"new_quantity_{st.session_state.product_form_reset}",
         )
 
     with col3:
         rate = st.number_input(
-            "Rate", min_value=0.0, value=0.0, step=50.0, key="new_rate"
+            "Rate",
+            min_value=0.0,
+            value=0.0,
+            step=50.0,
+            key=f"new_rate_{st.session_state.product_form_reset}",
         )
 
     with col4:
@@ -798,6 +874,9 @@ else:
         if product_name.strip() == "":
             st.error("Please enter the product name.")
 
+        elif quantity <= 0:
+            st.error("Please enter a quantity greater than 0.")
+
         elif rate <= 0:
             st.error("Please enter a valid rate.")
 
@@ -805,6 +884,9 @@ else:
             product = {"name": product_name, "quantity": quantity, "rate": rate}
 
             st.session_state.products.append(product)
+
+            # Create fresh Quantity and Rate widgets
+            st.session_state.product_form_reset += 1
 
             st.success(f"{product_name} added successfully!")
 
@@ -980,6 +1062,34 @@ if generate_bill:
         # Store PDF in session
         st.session_state.pdf_bytes = pdf_bytes
         st.session_state.generated_bill_no = bill_no
+        # ====================================================
+        # SAVE BILL DATA
+        # ====================================================
+
+        now = datetime.now()
+
+        bill_date = now.strftime("%d/%m/%y")
+        bill_time = now.strftime("%H:%M:%S")
+
+        for product in st.session_state.products:
+            amount = product["quantity"] * product["rate"]
+
+            st.session_state.bill_records.append({
+                "Bill No": bill_no,
+                "Date": bill_date,
+                "Time": bill_time,
+                "Customer Name": customer_name,
+                "Customer Number": customer_phone,
+                "Item": product["name"],
+                "Quantity": product["quantity"],
+                "Rate": product["rate"],
+                "Amount": amount,
+                "Sub Total": subtotal,
+                "GST %": gst_rate,
+                "GST Amount": gst_amount,
+                "Grand Total": grand_total,
+                "Payment Mode": payment_method,
+            })
 
         st.success("✅ Bill generated successfully!")
 
@@ -1006,110 +1116,105 @@ if "pdf_bytes" in st.session_state:
         use_container_width=True,
     )
 
-# ========================================================
-# WHATSAPP
-# ========================================================
+    # ========================================================
+    # WHATSAPP
+    # ========================================================
 
-whatsapp_number = "".join(
-    character for character in customer_phone if character.isdigit()
-)
+    whatsapp_number = "".join(
+        character for character in customer_phone if character.isdigit()
+    )
 
-# If Indian customer number entered as 10 digits
-if len(whatsapp_number) == 10:
-    whatsapp_number = "91" + whatsapp_number
+    # If Indian customer number entered as 10 digits
+    if len(whatsapp_number) == 10:
+        whatsapp_number = "91" + whatsapp_number
 
+    # ========================================================
+    # SHOP WHATSAPP NUMBER
+    # ========================================================
 
-# ========================================================
-# SHOP WHATSAPP NUMBER
-# ========================================================
+    shop_whatsapp_number = "".join(
+        character for character in shop_phone if character.isdigit()
+    )
 
-shop_whatsapp_number = "".join(
-    character for character in shop_phone if character.isdigit()
-)
+    # If Indian shop number entered as 10 digits
+    if len(shop_whatsapp_number) == 10:
+        shop_whatsapp_number = "91" + shop_whatsapp_number
 
-# If Indian shop number entered as 10 digits
-if len(shop_whatsapp_number) == 10:
-    shop_whatsapp_number = "91" + shop_whatsapp_number
+    # ========================================================
+    # CLICKABLE LINKS
+    # ========================================================
 
+    # Shop → Google Maps
+    maps_url = "https://www.google.com/maps/search/?api=1&query=" + quote(shop_location)
 
-# ========================================================
-# CLICKABLE LINKS
-# ========================================================
+    # Instagram
+    instagram_username = instagram.strip().replace("@", "")
 
-# Shop → Google Maps
-maps_url = "https://www.google.com/maps/search/?api=1&query=" + quote(shop_location)
+    instagram_url = f"https://www.instagram.com/{instagram_username}"
 
-# Instagram
-instagram_username = instagram.strip().replace("@", "")
+    # MAPOS website
+    mapos_url = "https://map-portfolio.netlify.app/"
 
-instagram_url = f"https://www.instagram.com/{instagram_username}"
+    # Shop WhatsApp
+    shop_whatsapp_url = f"https://wa.me/{shop_whatsapp_number}"
 
-# MAPOS website
-mapos_url = "https://map-portfolio.netlify.app/"
+    # ========================================================
+    # WHATSAPP MESSAGE
+    # ========================================================
 
-# Shop WhatsApp
-shop_whatsapp_url = f"https://wa.me/{shop_whatsapp_number}"
+    whatsapp_message = f"""Hello {customer_name},
 
+    Thank you for shopping with {shop_name}.
 
-# ========================================================
-# WHATSAPP MESSAGE
-# ========================================================
+    Bill No: {bill_no}
+    Total Items: {total_items}
+    Grand Total: ₹{grand_total:,.2f}
 
-whatsapp_message = f"""Hello {customer_name},
+    Please find your bill attached.
 
-Thank you for shopping with {shop_name}.
+    Shop Location:
+    {maps_url}
 
-Bill No: {bill_no}
-Total Items: {total_items}
-Grand Total: ₹{grand_total:,.2f}
+    Shop WhatsApp:
+    {shop_whatsapp_url}
 
-Please find your bill attached.
+    Instagram:
+    {instagram_url}
 
-Shop Location:
-{maps_url}
+    Powered by MAPOS
+    {mapos_url}
 
-Shop WhatsApp:
-{shop_whatsapp_url}
+    Thank you. Visit Us Again!"""
 
-Instagram:
-{instagram_url}
+    # ========================================================
+    # ENCODE MESSAGE ONCE
+    # ========================================================
 
-Powered by MAPOS
-{mapos_url}
+    whatsapp_url = f"https://wa.me/{whatsapp_number}?text={quote(whatsapp_message)}"
 
-Thank you. Visit Us Again!"""
+    # ========================================================
+    # SEND BUTTON
+    # ========================================================
 
-
-# ========================================================
-# ENCODE MESSAGE ONCE
-# ========================================================
-
-whatsapp_url = f"https://wa.me/{whatsapp_number}?text={quote(whatsapp_message)}"
-
-
-# ========================================================
-# SEND BUTTON
-# ========================================================
-
-st.markdown(
-    f"""
-    <a href="{whatsapp_url}" target="_blank">
-        <button style="
-            width: 100%;
-            padding: 12px;
-            background-color: #25D366;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
-        ">
-            📱 Send Bill on WhatsApp
-        </button>
-    </a>
-    """,
-    unsafe_allow_html=True,
-)
+    st.markdown(
+        f"""
+        <a href="{whatsapp_url}" target="_blank">
+            <button style="
+                width: 100%;
+                padding: 12px;
+                background-color: #25D366;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                cursor: pointer;
+            ">
+                📱 Send Bill on WhatsApp
+            </button>
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
 
 st.info(
     "WhatsApp will open with the customer's number and "
@@ -1117,6 +1222,20 @@ st.info(
     "and press Send."
 )
 
+# ========================================================
+# DOWNLOAD EXCEL
+# ========================================================
+
+if len(st.session_state.bill_records) > 0:
+    excel_bytes = create_excel_file(st.session_state.bill_records)
+
+    st.download_button(
+        label="📊 Download Bills Excel",
+        data=excel_bytes,
+        file_name="Sajad_Arts_Bills.xlsx",
+        mime=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        use_container_width=True,
+    )
 # ============================================================
 # NEW BILL
 # ============================================================
@@ -1124,11 +1243,20 @@ st.info(
 st.divider()
 
 if st.button("🔄 Start New Bill", use_container_width=True):
+    # Clear current products
     st.session_state.products = []
 
+    # Remove previous PDF
     if "pdf_bytes" in st.session_state:
         del st.session_state.pdf_bytes
 
-    st.session_state.bill_no = int(bill_no) + 1
+    # Increase bill number
+    st.session_state.bill_no += 1
+
+    # Force Bill Number widget to refresh
+    st.session_state.bill_number_reset += 1
+
+    # Reset product entry form
+    st.session_state.product_form_reset += 1
 
     st.rerun()
