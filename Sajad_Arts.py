@@ -1,6 +1,7 @@
 import streamlit as st
 from reportlab.lib import colors
 import pandas as pd
+import hashlib
 from openpyxl import Workbook, load_workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -16,6 +17,7 @@ from urllib.parse import quote
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from io import BytesIO
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -156,6 +158,20 @@ if "bill_number_reset" not in st.session_state:
 if "bill_records" not in st.session_state:
     st.session_state.bill_records = []
 
+if "product_options" not in st.session_state:
+    st.session_state.product_options = [
+        "Hashidar",
+        "Koundar",
+        "Pointdar",
+        "Paldar",
+        "Jaildar",
+        "Plain Colour",
+        "Zaati",
+        "Ari",
+    ]
+
+if "uploaded_items_file_id" not in st.session_state:
+    st.session_state.uploaded_items_file_id = None
 
 # ============================================================
 # PDF GENERATOR
@@ -676,6 +692,86 @@ bill_no = st.sidebar.number_input(
     key=f"bill_number_{st.session_state.bill_number_reset}",
 )
 
+# ========================================================
+# PRODUCT / ITEM LIST MANAGEMENT
+# ========================================================
+
+st.sidebar.divider()
+
+st.sidebar.header("📦 Product List")
+
+st.sidebar.caption(
+    "Export your product list, edit it in Excel, "
+    "and upload it back to update the dropdown."
+)
+
+# ========================================================
+# EXPORT ITEMS EXCEL
+# ========================================================
+
+items_df = pd.DataFrame({"Item": st.session_state.product_options})
+
+items_buffer = BytesIO()
+
+with pd.ExcelWriter(items_buffer, engine="openpyxl") as writer:
+    items_df.to_excel(writer, index=False, sheet_name="Items")
+
+items_buffer.seek(0)
+
+st.sidebar.download_button(
+    label="📤 Export Items Excel",
+    data=items_buffer,
+    file_name="Sajad_Arts_Items.xlsx",
+    mime=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    use_container_width=True,
+)
+
+# ========================================================
+# UPLOAD ITEMS EXCEL
+# ========================================================
+
+uploaded_items_file = st.sidebar.file_uploader(
+    "📥 Upload Updated Items Excel",
+    type=["xlsx"],
+    help="Upload an Excel file containing an 'Item' column.",
+)
+
+if uploaded_items_file is not None:
+    file_bytes = uploaded_items_file.getvalue()
+
+    file_id = hashlib.md5(file_bytes).hexdigest()
+
+    if file_id != st.session_state.uploaded_items_file_id:
+        try:
+            uploaded_items_df = pd.read_excel(BytesIO(file_bytes))
+
+            if "Item" not in uploaded_items_df.columns:
+                st.sidebar.error("❌ Excel file must contain an 'Item' column.")
+
+            else:
+                uploaded_items = (
+                    uploaded_items_df["Item"].dropna().astype(str).str.strip()
+                )
+
+                uploaded_items = uploaded_items[uploaded_items != ""]
+
+                uploaded_items = uploaded_items.drop_duplicates().tolist()
+
+                if not uploaded_items:
+                    st.sidebar.error("❌ No products found in the Excel file.")
+
+                else:
+                    st.session_state.product_options = uploaded_items
+
+                    st.session_state.uploaded_items_file_id = file_id
+
+                    st.session_state.product_form_reset += 1
+
+                    st.sidebar.success(f"✅ {len(uploaded_items)} products loaded.")
+
+        except Exception as e:
+            st.sidebar.error(f"❌ Could not read Excel file: {e}")
+
 # ============================================================
 # PRODUCT ENTRY / EDIT PRODUCT
 # ============================================================
@@ -693,34 +789,18 @@ if st.session_state.editing_product is not None:
 
     st.info(f"✏️ Editing Product: {edit_product['name']}")
 
+    col1, col2, col3, col4 = st.columns([3, 2, 2.5, 1])
+
     # --------------------------------------------------------
     # PRODUCT OPTIONS
     # --------------------------------------------------------
 
-    product_options = [
-        "Hashidar",
-        "Koundar",
-        "Pointdar",
-        "Paldar",
-        "Jaildar",
-        "Plain Colour",
-        "Zaati",
-        "Ari",
-        "➕ Add New Product...",
-    ]
+    product_options = st.session_state.product_options.copy()
 
-    # If the existing product is not in the standard list,
-    # add it temporarily so it can still be selected.
     current_product = edit_product["name"]
 
     if current_product not in product_options:
         product_options.insert(0, current_product)
-
-    # --------------------------------------------------------
-    # INPUT FIELDS
-    # --------------------------------------------------------
-
-    col1, col2, col3, col4 = st.columns([3, 2, 2.5, 1])
 
     # --------------------------------------------------------
     # PRODUCT NAME
@@ -734,16 +814,7 @@ if st.session_state.editing_product is not None:
             key="edit_product_select",
         )
 
-        # If user chooses Add New Product
-        if selected_edit_product == "➕ Add New Product...":
-            product_name = st.text_input(
-                "Enter New Product Name",
-                placeholder="Type new product name",
-                key="edit_new_product_name",
-            )
-
-        else:
-            product_name = selected_edit_product
+        product_name = selected_edit_product
 
     # --------------------------------------------------------
     # QUANTITY
@@ -821,35 +892,23 @@ if st.session_state.editing_product is not None:
 
         st.rerun()
 
+# ============================================================
+# NORMAL ADD PRODUCT MODE
+# ============================================================
+
 else:
     col1, col2, col3, col4 = st.columns([3, 2, 2.5, 1])
 
     with col1:
-        product_options = [
-            "Hashidar",
-            "Koundar",
-            "Pointdar",
-            "Paldar",
-            "Jaildar",
-            "Plain Colour",
-            "Zaati",
-            "Ari",
-            "➕ Add New Product...",
-        ]
+        product_options = st.session_state.product_options
 
         selected_product = st.selectbox(
-            "Product Name", product_options, key="selected_product"
+            "Product Name",
+            product_options,
+            key=(f"selected_product_{st.session_state.product_form_reset}"),
         )
 
-        if selected_product == "➕ Add New Product...":
-            product_name = st.text_input(
-                "Enter New Product Name",
-                placeholder="Type new product name",
-                key="new_product_name",
-            )
-
-        else:
-            product_name = selected_product
+        product_name = selected_product
 
     with col2:
         quantity = st.number_input(
@@ -858,7 +917,7 @@ else:
             value=0,
             step=1,
             format="%d",
-            key=f"new_quantity_{st.session_state.product_form_reset}",
+            key=(f"new_quantity_{st.session_state.product_form_reset}"),
         )
 
     with col3:
@@ -867,7 +926,7 @@ else:
             min_value=0.0,
             value=0.0,
             step=50.0,
-            key=f"new_rate_{st.session_state.product_form_reset}",
+            key=(f"new_rate_{st.session_state.product_form_reset}"),
         )
 
     with col4:
@@ -891,11 +950,15 @@ else:
             st.error("Please enter a valid rate.")
 
         else:
-            product = {"name": product_name, "quantity": quantity, "rate": rate}
+            product = {
+                "name": product_name,
+                "quantity": quantity,
+                "rate": rate,
+            }
 
             st.session_state.products.append(product)
 
-            # Create fresh Quantity and Rate widgets
+            # Reset the product entry form
             st.session_state.product_form_reset += 1
 
             st.success(f"{product_name} added successfully!")
