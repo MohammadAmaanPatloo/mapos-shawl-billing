@@ -17,9 +17,9 @@ from urllib.parse import quote
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from io import BytesIO
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from copy import copy
 
 
 # ============================================================
@@ -157,6 +157,12 @@ if "bill_number_reset" not in st.session_state:
 
 if "bill_records" not in st.session_state:
     st.session_state.bill_records = []
+
+if "uploaded_bills_file_id" not in st.session_state:
+    st.session_state.uploaded_bills_file_id = None
+
+if "bills_file_loaded" not in st.session_state:
+    st.session_state.bills_file_loaded = False
 
 if "product_options" not in st.session_state:
     st.session_state.product_options = [
@@ -614,8 +620,13 @@ def create_excel_file(bill_records):
 
         worksheet = writer.sheets["Bills"]
 
-        # Freeze header row
         worksheet.freeze_panes = "A2"
+
+        # Bold header
+        for cell in worksheet[1]:
+            new_font = copy(cell.font)
+            new_font.bold = True
+            cell.font = new_font
 
         # Auto-adjust column widths
         for column_cells in worksheet.columns:
@@ -677,10 +688,9 @@ payment_method = st.sidebar.selectbox(
 
 st.sidebar.divider()
 
-
-# ============================================================
+# ========================================================
 # BILL NUMBER
-# ============================================================
+# ========================================================
 
 st.sidebar.title("🧾 Bill Information")
 
@@ -691,7 +701,6 @@ bill_no = st.sidebar.number_input(
     step=1,
     key=f"bill_number_{st.session_state.bill_number_reset}",
 )
-
 # ========================================================
 # PRODUCT / ITEM LIST MANAGEMENT
 # ========================================================
@@ -771,6 +780,119 @@ if uploaded_items_file is not None:
 
         except Exception as e:
             st.sidebar.error(f"❌ Could not read Excel file: {e}")
+
+# ========================================================
+# BILL RECORDS MANAGEMENT
+# ========================================================
+
+st.sidebar.divider()
+
+st.sidebar.header("📊 Bill Records")
+
+st.sidebar.caption(
+    "Upload your previous Bills Excel after restarting "
+    "the app to continue your billing history."
+)
+
+# ========================================================
+# UPLOAD PREVIOUS BILLS EXCEL
+# ========================================================
+
+uploaded_bills_file = st.sidebar.file_uploader(
+    "📤 Upload Previous Bills Excel",
+    type=["xlsx"],
+    key="bills_excel_uploader",
+    help="Upload your previously downloaded Sajad Arts Bills Excel file.",
+)
+
+if uploaded_bills_file is not None:
+    file_bytes = uploaded_bills_file.getvalue()
+
+    # Create unique ID based on file contents
+    file_id = hashlib.md5(file_bytes).hexdigest()
+
+    # Only process the file once
+    if file_id != st.session_state.uploaded_bills_file_id:
+        try:
+            uploaded_bills_df = pd.read_excel(BytesIO(file_bytes), sheet_name="Bills")
+
+            required_columns = [
+                "Bill No",
+                "Date",
+                "Time",
+                "Customer Name",
+                "Customer Number",
+                "Item",
+                "Quantity",
+                "Rate",
+                "Amount",
+                "Sub Total",
+                "GST %",
+                "GST Amount",
+                "Grand Total",
+                "Payment Mode",
+            ]
+
+            missing_columns = [
+                column
+                for column in required_columns
+                if column not in uploaded_bills_df.columns
+            ]
+
+            if missing_columns:
+                st.sidebar.error(
+                    "❌ Invalid Bills Excel file.\n\n"
+                    f"Missing columns: {', '.join(missing_columns)}"
+                )
+
+            else:
+                # Replace NaN with empty values
+                uploaded_bills_df = uploaded_bills_df.fillna("")
+
+                # Convert Excel rows to dictionaries
+                uploaded_records = uploaded_bills_df[required_columns].to_dict(
+                    "records"
+                )
+
+                # Load previous bills
+                st.session_state.bill_records = uploaded_records
+
+                # Remember uploaded file
+                st.session_state.uploaded_bills_file_id = file_id
+
+                st.session_state.bills_file_loaded = True
+
+                # ====================================================
+                # FIND NEXT BILL NUMBER
+                # ====================================================
+
+                if uploaded_bills_df.empty:
+                    next_bill_no = 1
+
+                else:
+                    bill_numbers = pd.to_numeric(
+                        uploaded_bills_df["Bill No"], errors="coerce"
+                    ).dropna()
+
+                    if len(bill_numbers) > 0:
+                        highest_bill_no = int(bill_numbers.max())
+
+                        next_bill_no = highest_bill_no + 1
+
+                    else:
+                        next_bill_no = 1
+
+                st.session_state.bill_no = next_bill_no
+
+                # Reset bill number widget
+                st.session_state.bill_number_reset += 1
+
+                st.sidebar.success(f"✅ {len(uploaded_records)} bill records loaded.")
+
+                st.sidebar.info(f"🧾 Next Bill No: {next_bill_no}")
+
+        except Exception as e:
+            st.sidebar.error(f"❌ Could not read Bills Excel: {e}")
 
 # ============================================================
 # PRODUCT ENTRY / EDIT PRODUCT
@@ -1296,22 +1418,24 @@ st.info(
 )
 
 # ========================================================
-# DOWNLOAD EXCEL
+# DOWNLOAD BILLS EXCEL
 # ========================================================
 
 if len(st.session_state.bill_records) > 0:
     excel_bytes = create_excel_file(st.session_state.bill_records)
 
     st.download_button(
-        label="📊 Download Bills Excel",
+        label="📥 Download Bills Excel",
         data=excel_bytes,
         file_name="Sajad_Arts_Bills.xlsx",
         mime=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         use_container_width=True,
+        key="download_bills_excel",
     )
-# ============================================================
+
+# ========================================================
 # NEW BILL
-# ============================================================
+# ========================================================
 
 st.divider()
 
@@ -1323,13 +1447,13 @@ if st.button("🔄 Start New Bill", use_container_width=True):
     if "pdf_bytes" in st.session_state:
         del st.session_state.pdf_bytes
 
-    # Increase bill number
+    # Automatically move to next bill
     st.session_state.bill_no += 1
 
-    # Force Bill Number widget to refresh
+    # Refresh bill number widget
     st.session_state.bill_number_reset += 1
 
-    # Reset product entry form
+    # Reset product form
     st.session_state.product_form_reset += 1
 
     st.rerun()
